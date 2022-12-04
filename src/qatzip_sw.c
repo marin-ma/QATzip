@@ -57,6 +57,22 @@
 
 #define GZIP_WRAPPER 16
 
+/* Paste this on the file you want to debug. */
+#include <stdio.h>
+#include <execinfo.h>
+void print_trace(void) {
+    char **strings;
+    size_t i, size;
+    enum Constexpr { MAX_SIZE = 1024 };
+    void *array[MAX_SIZE];
+    size = backtrace(array, MAX_SIZE);
+    strings = backtrace_symbols(array, size);
+    for (i = 0; i < size; i++)
+        printf("%s\n", strings[i]);
+    puts("");
+    free(strings);
+}
+
 static const QzExtraField_T g_extra_field = {
     .st1 = 'Q',
     .st2 = 'Z',
@@ -633,6 +649,8 @@ int qzSWCompress(QzSession_T *sess, const unsigned char *src,
                  unsigned int *src_len, unsigned char *dest,
                  unsigned int *dest_len, unsigned int last)
 {
+    QZ_PRINT("PRINT TRACE\n");
+    print_trace();
     int ret = QZ_FAIL;
     DataFormatInternal_T data_fmt;
     QzSess_T *qz_sess = NULL;

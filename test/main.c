@@ -1316,6 +1316,7 @@ void *qzCompressAndDecompress(void *arg)
             dumpInputData(src_sz, src);
             goto done;
         }
+        QZ_PRINT("INFO: Decompress data prepared.\n");
     }
 
 #ifdef ENABLE_THREAD_BARRIER
@@ -3911,7 +3912,8 @@ int main(int argc, char *argv[])
 
     args.test_format = TEST_GZIPEXT;
     args.comp_algorithm = default_params.common_params.comp_algorithm;
-    args.sw_backup = default_params.common_params.sw_backup;
+    // args.sw_backup = default_params.common_params.sw_backup;
+    args.sw_backup = 0;
     args.hw_buff_sz = default_params.common_params.hw_buff_sz;
     args.comp_lvl = default_params.common_params.comp_lvl;
     args.huffman_hdr = default_params.huffman_hdr;
@@ -4198,6 +4200,7 @@ int main(int argc, char *argv[])
         if (test == 4 || test == 10 || test == 11 || test == 12) {
             input_buf_len = GET_LOWER_32BITS(file_state.st_size);
         }
+        //QZ_PRINT("input_buf_len %d\n", input_buf_len);
         if (compress_buf_type == PINNED_MEM) {
             if (input_buf_len > MAX_HUGE_PAGE_SZ) {
                 QZ_ERROR("ERROR: only can allocate 2M memory in huge page\n");
@@ -4247,8 +4250,14 @@ int main(int argc, char *argv[])
             test_arg[i].comp_out_sz = test_arg[i].src_sz * 2;
             test_arg[i].src = input_buf;
             test_arg[i].comp_out = malloc(test_arg[i].comp_out_sz);
+            if (!test_arg[i].comp_out && errno == ENOMEM) {
+              QZ_PRINT("ERROR comp_out %d \n", test_arg[i].comp_out_sz);
+            }
             test_arg[i].decomp_out_sz = test_arg[i].src_sz * 5;
             test_arg[i].decomp_out = malloc(test_arg[i].decomp_out_sz);
+            if (!test_arg[i].decomp_out && errno == ENOMEM) {
+              QZ_PRINT("ERROR decomp_out %d \n", test_arg[i].decomp_out_sz);
+            }
         }
         test_arg[i].gen_data = g_input_file_name ? 0 : 1;
         test_arg[i].init_engine_disabled = disable_init_engine;
@@ -4268,12 +4277,22 @@ int main(int argc, char *argv[])
 #ifdef ENABLE_THREAD_BARRIER
     pthread_barrier_init(&g_bar, NULL, thread_count);
 #endif
+
     for (i = 0; i < thread_count; i++) {
+        cpu_set_t cpuset;
+        CPU_ZERO(&cpuset);
+        CPU_SET(i + 2, &cpuset);
         rc = pthread_create(&threads[i], NULL, test_arg[i].ops, (void *)&test_arg[i]);
         if (0 != rc) {
             QZ_ERROR("Error from pthread_create %d\n", rc);
             goto done;
         }
+        rc = pthread_setaffinity_np(threads[i], sizeof(cpuset), &cpuset);
+        if (0 != rc) {
+            QZ_ERROR("Error from pthread_setaffinity_np%d\n", rc);
+            goto done;
+        }
+
     }
 
 #ifndef ENABLE_THREAD_BARRIER

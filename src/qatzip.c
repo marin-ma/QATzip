@@ -2144,6 +2144,10 @@ int qzCompressCrcExt(QzSession_T *sess, const unsigned char *src,
         if (unlikely(QZ_OK != rc)) {
             qzReleaseInstance(i);
             if (QZ_LOW_MEM == rc || QZ_NO_INST_ATTACH == rc) {
+                if (QZ_LOW_MEM == rc)
+                    QZ_DEBUG("LOWMEM\n");
+                else
+                    QZ_DEBUG("QZ_NO_INST_ATTACH\n");
                 goto sw_compression;
             } else {
                 *src_len = 0;

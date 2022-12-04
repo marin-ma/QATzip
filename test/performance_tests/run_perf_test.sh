@@ -79,49 +79,125 @@ then
     \cp $CURRENT_PATH/config_file/dh895xcc/dh895xcc_dev0.conf /etc
 elif [ $platform = "4940" ]
 then
-    process=48
+    process=$NUM_P
+    fp=$(($NUM_P / 2))
+    if [ $NUM_P = 1 ]
+    then
+      fp=1
+    fi
+    ft=$((64 / $fp))
+    conf_file=$CURRENT_PATH/config_file/4xxx/${fp}x${ft}.conf
+    echo "use conf file: $conf_file"
+    \cp -f $conf_file $CURRENT_PATH/config_file/4xxx/4xxx_dev0.conf
+    \cp -f $conf_file $CURRENT_PATH/config_file/4xxx/4xxx_dev1.conf
     \cp $CURRENT_PATH/config_file/4xxx/4xxx*.conf /etc
 elif [ $platform = "C3000" ]
 then
     process=4
     \cp $CURRENT_PATH/config_file/c3xxx/c3xxx_dev0.conf /etc
 fi
+
+thread=4
+if [ $platform = "4940" ]
+then
+    thread=$NUM_T
+fi
+
 service qat_service restart
 echo 1024 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
 rmmod usdm_drv
-insmod $ICP_ROOT/build/usdm_drv.ko max_huge_pages=1024 max_huge_pages_per_process=24
+insmod $ICP_ROOT/build/usdm_drv.ko max_huge_pages=1024 max_huge_pages_per_process=$((1024/$process))
 sleep 5
 
 #Perform performance test
 echo "Perform performance test"
-thread=4
-if [ $platform = "4940" ]
+echo "Process: $process x Threads: $thread"
+
+loop="10000"
+loop_min="1000"
+loop_max="100000"
+extra_arg="-m 4 -t $thread -B 0"
+
+output_prefix=${process}x${thread}_result
+if [ $INPUT_TAG ]
 then
-    thread=1
+  output_prefix=${INPUT_TAG}"_"${output_prefix}
 fi
 
-echo > result_comp
-cpu_list=0
-for((numProc_comp = 0; numProc_comp < $process; numProc_comp ++))
-do
-    taskset -c $cpu_list $QZ_ROOT/test/test -m 4 -l 1000 -t $thread -D comp >> result_comp 2>> result_comp_stderr &
-    cpu_list=$(($cpu_list + 1))
-done
-wait
-compthroughput=`awk '{sum+=$8} END{print sum}' result_comp`
-echo "compthroughput=$compthroughput Gbps"
+if [[ ! -z $QZ_POLLING_MODE && $QZ_POLLING_MODE == "BUSY" ]]
+then
+  extra_arg=${extra_arg}" -P busy"
+  output_prefix=${output_prefix}"_busy"
+fi
 
-echo > result_decomp
-cpu_list=0
-for((numProc_decomp = 0; numProc_decomp < $process; numProc_decomp ++))
-do
-    taskset -c $cpu_list $QZ_ROOT/test/test -m 4 -l 1000 -t $thread -D decomp >> result_decomp 2>> result_decomp_stderr &
-    cpu_list=$(($cpu_list + 1))
-done
-wait
-decompthroughput=`awk '{sum+=$8} END{print sum}' result_decomp`
-echo "decompthroughput=$decompthroughput Gbps"
+if [ $INPUT_FILE ]
+then
+  input_file_szb=`du -b $INPUT_FILE | awk '{print $1}'`
+  echo "Input file size in bits: "$input_file_szb
+  gb_threshold=$(( 1 << 30 ))
+  mb_threshold=$(( 1 << 20 ))
+  if [ $input_file_szb -lt $gb_threshold ] && [ $thread -lt 16 ]
+  then
+    loop_=$(( $gb_threshold / $input_file_szb * 2 ))
+    if [ $loop_ -gt $loop_max ]
+    then
+      loop=$loop_max
+    elif [ $loop_ -gt $loop ]
+    then
+      loop=$loop_
+    fi
+  elif [ $input_file_szb -ge $mb_threshold ] && [ $thread -gt 16 ]
+  then
+    loop=$loop_min
+  fi
+  extra_arg=${extra_arg}" -i $INPUT_FILE -l $loop"
+else
+  extra_arg=${extra_arg}" -l $loop"
+fi
+echo "extra arg: $extra_arg"
 
-rm -f result_comp
-rm -f result_decomp
+function comp() {
+  output=$output_prefix"_comp"
+  echo > $output
+  cpu_list=2
+  for((numProc_comp = 0; numProc_comp < $process; numProc_comp ++))
+  do
+      taskset -c $cpu_list $QZ_ROOT/test/test -D comp ${extra_arg} >> $output 2>> result_comp_stderr &
+      cpu_list=$(($cpu_list + 1))
+  done
+  wait
+  compthroughput=`awk '{sum+=$8} END{print sum}' $output`
+  head -n2 $output
+  tail -n1 $output
+  echo "compthroughput=$compthroughput Gbps"
+}
+
+function decomp() {
+  output=$output_prefix"_decomp"
+  echo > $output
+  cpu_list=1
+  for((numProc_decomp = 0; numProc_decomp < $process; numProc_decomp ++))
+  do
+      taskset -c $cpu_list $QZ_ROOT/test/test -D decomp ${extra_arg} >> $output 2>> result_decomp_stderr &
+      cpu_list=$(($cpu_list + 1))
+  done
+  wait
+  decompthroughput=`awk '{sum+=$8} END{print sum}' $output`
+  head -n2 $output
+  tail -n1 $output
+  echo "decompthroughput=$decompthroughput Gbps"
+}
+
+if [[ ! -z $QZ_DECOMP && $QZ_DECOMP == "TRUE" ]]
+then
+  time decomp
+else
+  time comp
+fi
+
+# rm -f result_comp
+# rm -f result_decomp
 echo "***QZ_ROOT run_perf_test.sh end"
+echo "####################################################################################################"
+echo ""
+echo ""
